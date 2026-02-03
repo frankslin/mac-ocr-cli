@@ -17,6 +17,7 @@ swiftc ocr.swift -o ocr_tool
 
 ```bash
 ./ocr_tool /path/to/image.png
+./ocr_tool /path/to/image.png --langs zh-Hans,zh-Hant,ja-JP,en-US
 ```
 
 The output is JSON:
@@ -28,7 +29,8 @@ The output is JSON:
 ## Notes
 
 - Coordinates are Vision’s normalized bounding boxes (origin at bottom-left).
-- Default recognition languages: Simplified Chinese and English.
+- Default recognition languages: Simplified Chinese, Traditional Chinese, Japanese, and English.
+- Override with `--langs` or `-l` using a comma-separated list (e.g. `zh-Hans,ja-JP`).
 - Recognition level is set to `accurate`.
 
 ## License

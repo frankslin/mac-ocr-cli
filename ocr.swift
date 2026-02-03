@@ -2,13 +2,57 @@ import Foundation
 import Vision
 import Cocoa
 
-// 1. Check arguments
-guard CommandLine.arguments.count > 1 else {
+// 1. Parse arguments
+let args = Array(CommandLine.arguments.dropFirst())
+guard !args.isEmpty else {
     print("Error: Please provide image path")
+    print("Usage: ocr_tool <image_path> [--langs <lang1,lang2,...>]")
     exit(1)
 }
 
-let imagePath = CommandLine.arguments[1]
+var imagePath: String?
+var recognitionLanguages = ["zh-Hans", "zh-Hant", "ja-JP", "en-US"]
+
+var i = 0
+while i < args.count {
+    let arg = args[i]
+    if arg == "--langs" || arg == "-l" {
+        let nextIndex = i + 1
+        guard nextIndex < args.count else {
+            print("Error: Missing value for \(arg)")
+            exit(1)
+        }
+        let raw = args[nextIndex]
+        let parts = raw.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        let langs = parts.filter { !$0.isEmpty }.map { String($0) }
+        if langs.isEmpty {
+            print("Error: Empty language list")
+            exit(1)
+        }
+        recognitionLanguages = langs
+        i += 2
+        continue
+    }
+
+    if arg.hasPrefix("-") {
+        print("Error: Unknown option \(arg)")
+        exit(1)
+    }
+
+    if imagePath == nil {
+        imagePath = arg
+    } else {
+        print("Error: Unexpected extra argument \(arg)")
+        exit(1)
+    }
+    i += 1
+}
+
+guard let imagePath = imagePath else {
+    print("Error: Please provide image path")
+    print("Usage: ocr_tool <image_path> [--langs <lang1,lang2,...>]")
+    exit(1)
+}
 
 // 2. Load image
 guard let nsImage = NSImage(contentsOfFile: imagePath),
@@ -57,7 +101,7 @@ let request = VNRecognizeTextRequest { request, error in
 request.recognitionLevel = .accurate
 
 // Supported languages (auto-detect or specify)
-request.recognitionLanguages = ["zh-Hans", "en-US"]
+request.recognitionLanguages = recognitionLanguages
 
 // Use language correction
 request.usesLanguageCorrection = true
