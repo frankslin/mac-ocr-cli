@@ -16,11 +16,13 @@ swiftc ocr.swift -o ocr_tool
 ## Usage
 
 ```bash
+./ocr_tool --list-revisions
 ./ocr_tool /path/to/image.png --json
 ./ocr_tool /path/to/image.png --langs zh-Hans,zh-Hant,ja-JP,en-US --json
 ./ocr_tool /path/to/input.pdf --page 1 --pdf /path/to/output.pdf
 ./ocr_tool /path/to/input.pdf --page 1 --json --scale 4
 ./ocr_tool /path/to/input.pdf --page 1 --json --scale 4 --debug-image /tmp/page1.png
+./ocr_tool /path/to/image.png --json --revision 3
 ```
 
 The output is JSON:
@@ -37,6 +39,8 @@ The output is JSON:
 - PDF input requires `--page <n>` (1-based).
 - Use `--scale <factor>` to render PDF pages at higher resolution (default `3`).
 - Use `--debug-image <path>` to write the rendered page image for inspection.
+- Use `--revision <n>` to select a Vision recognition revision (defaults to latest supported).
+- Use `--list-revisions` to print supported recognition revisions and exit (macOS 12+).
 - Choose exactly one output mode: `--json` or `--pdf <out.pdf>`.
 - Use `--pdf <out.pdf>` to write a searchable PDF with an invisible text layer.
 - Recognition level is set to `accurate`.

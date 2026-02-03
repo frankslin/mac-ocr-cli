@@ -7,7 +7,7 @@ import PDFKit
 let args = Array(CommandLine.arguments.dropFirst())
 guard !args.isEmpty else {
     print("Error: Please provide image path")
-    print("Usage: ocr_tool <image_path|pdf_path> [--langs <lang1,lang2,...>] [--page <n>] (--json | --pdf <out.pdf>)")
+    print("Usage: ocr_tool [--list-revisions] <image_path|pdf_path> [--langs <lang1,lang2,...>] [--page <n>] [--scale <factor>] [--debug-image <path>] [--revision <n>] (--json | --pdf <out.pdf>)")
     exit(1)
 }
 
@@ -18,6 +18,8 @@ var outputPDFPath: String?
 var outputJSON = false
 var pdfScale: CGFloat = 3.0
 var debugImagePath: String?
+var recognitionRevision: Int?
+var listRevisions = false
 
 var i = 0
 while i < args.count {
@@ -89,6 +91,26 @@ while i < args.count {
         i += 2
         continue
     }
+    if arg == "--revision" || arg == "-r" {
+        let nextIndex = i + 1
+        guard nextIndex < args.count else {
+            print("Error: Missing value for \(arg)")
+            exit(1)
+        }
+        let raw = args[nextIndex]
+        guard let val = Int(raw), val > 0 else {
+            print("Error: Invalid revision \(raw)")
+            exit(1)
+        }
+        recognitionRevision = val
+        i += 2
+        continue
+    }
+    if arg == "--list-revisions" {
+        listRevisions = true
+        i += 1
+        continue
+    }
     if arg == "--json" {
         outputJSON = true
         i += 1
@@ -109,9 +131,25 @@ while i < args.count {
     i += 1
 }
 
+if listRevisions {
+    if #available(macOS 12.0, *) {
+        let probe = VNRecognizeTextRequest()
+        probe.recognitionLevel = .accurate
+        probe.recognitionLanguages = recognitionLanguages
+        probe.usesLanguageCorrection = true
+        let supported = collectSupportedRevisions(using: probe)
+        let list = supported.sorted().map(String.init).joined(separator: ",")
+        print(list)
+        exit(0)
+    } else {
+        print("Error: --list-revisions requires macOS 12+")
+        exit(1)
+    }
+}
+
 guard let imagePath = imagePath else {
     print("Error: Please provide image path")
-    print("Usage: ocr_tool <image_path|pdf_path> [--langs <lang1,lang2,...>] [--page <n>] (--json | --pdf <out.pdf>)")
+    print("Usage: ocr_tool [--list-revisions] <image_path|pdf_path> [--langs <lang1,lang2,...>] [--page <n>] [--scale <factor>] [--debug-image <path>] [--revision <n>] (--json | --pdf <out.pdf>)")
     exit(1)
 }
 
@@ -254,6 +292,39 @@ request.recognitionLanguages = recognitionLanguages
 
 // Use language correction
 request.usesLanguageCorrection = true
+
+// Recognition revision (use latest supported if not specified)
+func collectSupportedRevisions(using template: VNRecognizeTextRequest) -> [Int] {
+    var revisions: [Int] = []
+    let candidates = [1, 2, 3, 4]
+
+    if #available(macOS 12.0, *) {
+        for rev in candidates {
+            let probe = VNRecognizeTextRequest()
+            probe.recognitionLevel = template.recognitionLevel
+            probe.recognitionLanguages = template.recognitionLanguages
+            probe.usesLanguageCorrection = template.usesLanguageCorrection
+            probe.revision = rev
+            if let _ = try? probe.supportedRecognitionLanguages() {
+                revisions.append(rev)
+            }
+        }
+    }
+
+    return revisions
+}
+
+let supportedRevisions = collectSupportedRevisions(using: request)
+if let recognitionRevision = recognitionRevision {
+    if supportedRevisions.contains(recognitionRevision) {
+        request.revision = recognitionRevision
+    } else {
+        print("Error: Unsupported recognition revision \(recognitionRevision)")
+        exit(1)
+    }
+} else if let latest = supportedRevisions.max() {
+    request.revision = latest
+}
 
 // 5. Perform request
 let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
