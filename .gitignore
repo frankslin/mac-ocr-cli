@@ -1,0 +1,15 @@
+# macOS
+.DS_Store
+
+# Swift build artifacts
+*.o
+*.dSYM/
+*.swiftmodule
+*.swiftdoc
+*.swiftinterface
+
+# Binaries
+ocr_tool
+
+# Xcode
+DerivedData/
