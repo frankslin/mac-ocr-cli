@@ -13,10 +13,22 @@ A minimal macOS OCR command-line tool written in Swift, using Apple’s Vision f
 swiftc ocr.swift -o ocr_tool
 ```
 
+## CI Build
+
+The GitHub Actions workflow builds a `universal2` binary on macOS and uploads it as an artifact:
+
+```bash
+ocr_tool-universal2
+```
+
 ## Usage
 
 ```bash
 ./ocr_tool --list-revisions
+./ocr_tool --help
+./ocr_tool -h
+./ocr_tool --version
+./ocr_tool -v
 ./ocr_tool /path/to/image.png --json
 ./ocr_tool /path/to/image.png --langs zh-Hans,zh-Hant,ja-JP,en-US --json
 ./ocr_tool /path/to/input.pdf --page 1 --pdf /path/to/output.pdf
@@ -41,6 +53,16 @@ The output is JSON:
 - Use `--debug-image <path>` to write the rendered page image for inspection.
 - Use `--revision <n>` to select a Vision recognition revision (defaults to latest supported).
 - Use `--list-revisions` to print supported recognition revisions and exit (macOS 12+).
+- Use `--help` or `-h` to show all options.
+- Use `--version` or `-v` to show the build commit ID.
+
+### Embed Commit ID
+
+To compile with the current git commit ID embedded:
+
+```bash
+./scripts/build.sh
+```
 - Choose exactly one output mode: `--json` or `--pdf <out.pdf>`.
 - Use `--pdf <out.pdf>` to write a searchable PDF with an invisible text layer.
 - Recognition level is set to `accurate`.

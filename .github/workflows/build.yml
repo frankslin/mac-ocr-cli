@@ -1,0 +1,35 @@
+name: build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  macos-universal:
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build universal2
+        shell: bash
+        run: |
+          set -euo pipefail
+          COMMIT=$(git rev-parse --short HEAD)
+          TMP=$(mktemp)
+          trap 'rm -f "$TMP"' EXIT
+          sed "s/__GIT_COMMIT__/${COMMIT}/g" ocr.swift > "$TMP"
+
+          SDKROOT=$(xcrun --show-sdk-path)
+          swiftc "$TMP" -o ocr_tool_arm64 -sdk "$SDKROOT" -target arm64-apple-macosx11.0
+          swiftc "$TMP" -o ocr_tool_x86_64 -sdk "$SDKROOT" -target x86_64-apple-macosx11.0
+
+          lipo -create -output ocr_tool ocr_tool_arm64 ocr_tool_x86_64
+          rm -f ocr_tool_arm64 ocr_tool_x86_64
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ocr_tool-universal2
+          path: ocr_tool

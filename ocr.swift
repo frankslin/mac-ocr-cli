@@ -5,9 +5,42 @@ import PDFKit
 
 // 1. Parse arguments
 let args = Array(CommandLine.arguments.dropFirst())
+
+let buildCommit = "__GIT_COMMIT__"
+
+let helpText = """
+Usage: ocr_tool [--help] [--version] [--list-revisions] <image_path|pdf_path> [--langs <lang1,lang2,...>] [--page <n>] [--scale <factor>] [--debug-image <path>] [--revision <n>] (--json | --pdf <out.pdf>)
+
+Options:
+  --help                 Show this help and exit.
+  --version, -v          Show build commit ID and exit.
+  --list-revisions       Print supported recognition revisions and exit (macOS 12+).
+  --langs, -l            Comma-separated language list (default: zh-Hans,zh-Hant,ja-JP,en-US).
+  --page, -p             1-based page number for PDF input (required for PDF).
+  --scale, -s            PDF render scale factor (default: 3).
+  --debug-image          Write rendered page image to a PNG for inspection.
+  --revision, -r         Vision recognition revision (defaults to latest supported).
+  --json                 Output JSON only.
+  --pdf                  Output searchable PDF with invisible text layer.
+"""
+
+if args.contains("--help") || args.contains("-h") {
+    print(helpText)
+    exit(0)
+}
+
+if args.contains("--version") || args.contains("-v") {
+    if buildCommit == "__GIT_COMMIT__" {
+        print("unknown")
+    } else {
+        print(buildCommit)
+    }
+    exit(0)
+}
+
 guard !args.isEmpty else {
     print("Error: Please provide image path")
-    print("Usage: ocr_tool [--list-revisions] <image_path|pdf_path> [--langs <lang1,lang2,...>] [--page <n>] [--scale <factor>] [--debug-image <path>] [--revision <n>] (--json | --pdf <out.pdf>)")
+    print(helpText)
     exit(1)
 }
 
@@ -149,7 +182,7 @@ if listRevisions {
 
 guard let imagePath = imagePath else {
     print("Error: Please provide image path")
-    print("Usage: ocr_tool [--list-revisions] <image_path|pdf_path> [--langs <lang1,lang2,...>] [--page <n>] [--scale <factor>] [--debug-image <path>] [--revision <n>] (--json | --pdf <out.pdf>)")
+    print(helpText)
     exit(1)
 }
 
