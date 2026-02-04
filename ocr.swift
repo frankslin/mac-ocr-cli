@@ -2,23 +2,33 @@ import Foundation
 import Vision
 import Cocoa
 import PDFKit
+import ImageIO
+import UniformTypeIdentifiers
 
 // 1. Parse arguments
 let args = Array(CommandLine.arguments.dropFirst())
 
 let buildCommit = "__GIT_COMMIT_VALUE__"
+let projectURL = "https://github.com/frankslin/mac-ocr-cli"
+let authorName = "Frank Lin"
+let toolSignature: String = {
+    let commit = (buildCommit == "__GIT_COMMIT_VALUE__") ? "unknown" : buildCommit
+    return "mac-ocr-cli \(projectURL) by \(authorName) (commit \(commit))"
+}()
 
 let helpText = """
-Usage: ocr_tool [--help] [--version] [--list-revisions] <image_path|pdf_path> [--langs <lang1,lang2,...>] [--page <n>] [--scale <factor>] [--debug-image <path>] [--revision <n>] (--json | --pdf <out.pdf>)
+Usage: ocr_tool [--help] [--version] [--list-revisions] <image_path|pdf_path> [--langs <lang1,lang2,...>] [--page <n>] [--scale <factor>] [--debug-image <path>] [--revision <n>] [--bilevel] [--ccitt-g4] (--json | --pdf <out.pdf>)
 
 Options:
-  --help                 Show this help and exit.
+  --help, -h             Show this help and exit.
   --version, -v          Show build commit ID and exit.
   --list-revisions       Print supported recognition revisions and exit (macOS 12+).
   --langs, -l            Comma-separated language list (default: zh-Hans,zh-Hant,ja-JP,en-US).
   --page, -p             1-based page number for PDF input (required for PDF).
   --scale, -s            PDF render scale factor (default: 3).
   --debug-image          Write rendered page image to a PNG for inspection.
+  --bilevel              Force 1-bit bilevel image when writing PDF (for smaller size).
+  --ccitt-g4             Use libtiff+tiff2pdf for CCITT G4 PDF, then overlay text with qpdf.
   --revision, -r         Vision recognition revision (defaults to latest supported).
   --json                 Output JSON only.
   --pdf                  Output searchable PDF with invisible text layer.
@@ -53,6 +63,8 @@ var pdfScale: CGFloat = 3.0
 var debugImagePath: String?
 var recognitionRevision: Int?
 var listRevisions = false
+var forceBilevel = false
+var useCcittG4 = false
 
 var i = 0
 while i < args.count {
@@ -124,6 +136,16 @@ while i < args.count {
         i += 2
         continue
     }
+    if arg == "--bilevel" {
+        forceBilevel = true
+        i += 1
+        continue
+    }
+    if arg == "--ccitt-g4" {
+        useCcittG4 = true
+        i += 1
+        continue
+    }
     if arg == "--revision" || arg == "-r" {
         let nextIndex = i + 1
         guard nextIndex < args.count else {
@@ -190,10 +212,158 @@ if (outputJSON && outputPDFPath != nil) || (!outputJSON && outputPDFPath == nil)
     print("Error: Please choose exactly one output: --json or --pdf <out.pdf>")
     exit(1)
 }
+if useCcittG4 && outputPDFPath == nil {
+    print("Error: --ccitt-g4 requires --pdf output")
+    exit(1)
+}
 
 let isPDF = imagePath.lowercased().hasSuffix(".pdf")
 let cgImage: CGImage
 let pageSize: CGSize
+
+func isBilevel(_ image: CGImage) -> Bool {
+    return image.bitsPerComponent == 1 &&
+        image.bitsPerPixel == 1 &&
+        image.colorSpace?.model == .monochrome &&
+        image.alphaInfo == .none
+}
+
+func makeBilevelImage(_ image: CGImage) -> CGImage? {
+    let width = image.width
+    let height = image.height
+    let graySpace = CGColorSpaceCreateDeviceGray()
+
+    // First render into 8-bit grayscale
+    let bytesPerRow8 = width
+    guard let grayContext = CGContext(
+        data: nil,
+        width: width,
+        height: height,
+        bitsPerComponent: 8,
+        bytesPerRow: bytesPerRow8,
+        space: graySpace,
+        bitmapInfo: CGImageAlphaInfo.none.rawValue
+    ) else {
+        return nil
+    }
+    grayContext.interpolationQuality = .none
+    grayContext.setShouldAntialias(false)
+    grayContext.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+
+    guard let grayData = grayContext.data else {
+        return nil
+    }
+
+    // Then threshold into 1-bit buffer
+    let outBytesPerRow = (width + 7) / 8
+    let outSize = outBytesPerRow * height
+    let outData = UnsafeMutablePointer<UInt8>.allocate(capacity: outSize)
+    outData.initialize(repeating: 0, count: outSize)
+
+    let threshold: UInt8 = 128
+    for y in 0..<height {
+        let row8 = grayData.advanced(by: y * bytesPerRow8).assumingMemoryBound(to: UInt8.self)
+        let rowOut = outData.advanced(by: y * outBytesPerRow)
+        for x in 0..<width {
+            let v = row8[x]
+            if v >= threshold {
+                rowOut[x >> 3] |= (0x80 >> (x & 7))
+            }
+        }
+    }
+
+    let releaseCallback: CGDataProviderReleaseDataCallback = { _, data, _ in
+        data.assumingMemoryBound(to: UInt8.self).deallocate()
+    }
+    guard let provider = CGDataProvider(
+        dataInfo: nil,
+        data: outData,
+        size: outSize,
+        releaseData: releaseCallback
+    ) else {
+        outData.deallocate()
+        return nil
+    }
+
+    let bitmapInfo = CGBitmapInfo(rawValue: CGImageAlphaInfo.none.rawValue)
+    return CGImage(
+        width: width,
+        height: height,
+        bitsPerComponent: 1,
+        bitsPerPixel: 1,
+        bytesPerRow: outBytesPerRow,
+        space: graySpace,
+        bitmapInfo: bitmapInfo,
+        provider: provider,
+        decode: nil,
+        shouldInterpolate: false,
+        intent: .defaultIntent
+    )
+}
+
+func writeTIFF(image: CGImage, to url: URL, dpi: Double) -> Bool {
+    guard let destination = CGImageDestinationCreateWithURL(url as CFURL, UTType.tiff.identifier as CFString, 1, nil) else {
+        return false
+    }
+    let tiffProps: [CFString: Any] = [
+        kCGImagePropertyTIFFCompression: 1,
+        kCGImagePropertyTIFFXResolution: dpi,
+        kCGImagePropertyTIFFYResolution: dpi,
+        kCGImagePropertyTIFFResolutionUnit: 2,
+        kCGImagePropertyTIFFPhotometricInterpretation: 1
+    ]
+    CGImageDestinationAddImage(destination, image, tiffProps as CFDictionary)
+    return CGImageDestinationFinalize(destination)
+}
+
+@discardableResult
+func runProcess(_ launchPath: String, _ arguments: [String]) -> Int32 {
+    let task = Process()
+    task.executableURL = URL(fileURLWithPath: launchPath)
+    task.arguments = arguments
+    do {
+        try task.run()
+    } catch {
+        return -1
+    }
+    task.waitUntilExit()
+    return task.terminationStatus
+}
+
+func drawTextLayer(_ context: CGContext, pageSize: CGSize, results: [[String: Any]]) {
+    context.setTextDrawingMode(.invisible)
+    context.setFillColor(NSColor.black.cgColor)
+
+    for item in results {
+        guard
+            let text = item["text"] as? String,
+            let box = item["box"] as? [String: Any],
+            let x = box["x"] as? CGFloat,
+            let y = box["y"] as? CGFloat,
+            let w = box["w"] as? CGFloat,
+            let h = box["h"] as? CGFloat
+        else {
+            continue
+        }
+
+        let rect = CGRect(
+            x: x * pageSize.width,
+            y: y * pageSize.height,
+            width: max(w * pageSize.width, 1),
+            height: max(h * pageSize.height, 1)
+        )
+
+        let fontSize = max(rect.height, 1)
+        let font = CTFontCreateWithName("Helvetica" as CFString, fontSize, nil)
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: font
+        ]
+        let attributed = NSAttributedString(string: text, attributes: attrs)
+        let line = CTLineCreateWithAttributedString(attributed)
+        context.textPosition = CGPoint(x: rect.minX, y: rect.minY)
+        CTLineDraw(line, context)
+    }
+}
 
 if isPDF {
     guard let pageNumber = pageNumber else {
@@ -371,51 +541,117 @@ do {
 
 // 6. Optional: write searchable PDF with invisible text layer
 if let outputPDFPath = outputPDFPath {
-    var mediaBox = CGRect(origin: .zero, size: pageSize)
-    guard let consumer = CGDataConsumer(url: URL(fileURLWithPath: outputPDFPath) as CFURL) else {
-        print("Error: Cannot create PDF output")
-        exit(1)
-    }
-    guard let pdfContext = CGContext(consumer: consumer, mediaBox: &mediaBox, nil) else {
-        print("Error: Cannot create PDF context")
-        exit(1)
-    }
-    pdfContext.beginPDFPage(nil)
-    pdfContext.draw(cgImage, in: mediaBox)
-
-    pdfContext.setTextDrawingMode(.invisible)
-    pdfContext.setFillColor(NSColor.black.cgColor)
-
-    for item in ocrResults {
-        guard
-            let text = item["text"] as? String,
-            let box = item["box"] as? [String: Any],
-            let x = box["x"] as? CGFloat,
-            let y = box["y"] as? CGFloat,
-            let w = box["w"] as? CGFloat,
-            let h = box["h"] as? CGFloat
-        else {
-            continue
+    if useCcittG4 {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        do {
+            try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        } catch {
+            print("Error: Cannot create temp directory")
+            exit(1)
+        }
+        defer {
+            try? FileManager.default.removeItem(at: tempDir)
         }
 
-        let rect = CGRect(
-            x: x * pageSize.width,
-            y: y * pageSize.height,
-            width: max(w * pageSize.width, 1),
-            height: max(h * pageSize.height, 1)
-        )
+        guard let bilevelImage = makeBilevelImage(cgImage) else {
+            print("Error: Cannot create bilevel image for CCITT G4")
+            exit(1)
+        }
+        let inputTIFF = tempDir.appendingPathComponent("input.tif")
+        let g4TIFF = tempDir.appendingPathComponent("g4.tif")
+        let basePDF = tempDir.appendingPathComponent("base.pdf")
+        let textPDF = tempDir.appendingPathComponent("text.pdf")
 
-        let fontSize = max(rect.height, 1)
-        let font = CTFontCreateWithName("Helvetica" as CFString, fontSize, nil)
-        let attrs: [NSAttributedString.Key: Any] = [
-            .font: font
+        let dpi: Double = isPDF ? (72.0 * Double(pdfScale)) : 72.0
+        if !writeTIFF(image: bilevelImage, to: inputTIFF, dpi: dpi) {
+            print("Error: Cannot write temporary TIFF")
+            exit(1)
+        }
+
+        let rows = max(bilevelImage.height, 1)
+        let tiffcpStatus = runProcess("/opt/homebrew/bin/tiffcp", [
+            "-c", "g4", "-s", "-r", "\(rows)",
+            inputTIFF.path, g4TIFF.path
+        ])
+        if tiffcpStatus != 0 {
+            print("Error: tiffcp failed")
+            exit(1)
+        }
+
+        let tiff2pdfStatus = runProcess("/opt/homebrew/bin/tiff2pdf", [
+            "-o", basePDF.path,
+            "-c", toolSignature,
+            "-t", "mac-ocr-cli",
+            "-x", "\(dpi)",
+            "-y", "\(dpi)",
+            g4TIFF.path
+        ])
+        if tiff2pdfStatus != 0 {
+            print("Error: tiff2pdf failed")
+            exit(1)
+        }
+
+        // Create text-only PDF
+        var mediaBox = CGRect(origin: .zero, size: pageSize)
+        let info: [CFString: Any] = [
+            kCGPDFContextCreator: toolSignature,
+            kCGPDFContextTitle: "mac-ocr-cli"
         ]
-        let attributed = NSAttributedString(string: text, attributes: attrs)
-        let line = CTLineCreateWithAttributedString(attributed)
-        pdfContext.textPosition = CGPoint(x: rect.minX, y: rect.minY)
-        CTLineDraw(line, pdfContext)
-    }
+        guard let consumer = CGDataConsumer(url: textPDF as CFURL) else {
+            print("Error: Cannot create text PDF output")
+            exit(1)
+        }
+        guard let textContext = CGContext(consumer: consumer, mediaBox: &mediaBox, info as CFDictionary) else {
+            print("Error: Cannot create text PDF context")
+            exit(1)
+        }
+        textContext.beginPDFPage(nil)
+        drawTextLayer(textContext, pageSize: pageSize, results: ocrResults)
+        textContext.endPDFPage()
+        textContext.closePDF()
 
-    pdfContext.endPDFPage()
-    pdfContext.closePDF()
+        let qpdfStatus = runProcess("/opt/homebrew/bin/qpdf", [
+            basePDF.path,
+            "--overlay", textPDF.path, "--",
+            outputPDFPath
+        ])
+        if qpdfStatus != 0 {
+            print("Error: qpdf overlay failed")
+            exit(1)
+        }
+    } else {
+        var mediaBox = CGRect(origin: .zero, size: pageSize)
+        let info: [CFString: Any] = [
+            kCGPDFContextCreator: toolSignature,
+            kCGPDFContextTitle: "mac-ocr-cli"
+        ]
+        guard let consumer = CGDataConsumer(url: URL(fileURLWithPath: outputPDFPath) as CFURL) else {
+            print("Error: Cannot create PDF output")
+            exit(1)
+        }
+        guard let pdfContext = CGContext(consumer: consumer, mediaBox: &mediaBox, info as CFDictionary) else {
+            print("Error: Cannot create PDF context")
+            exit(1)
+        }
+        pdfContext.beginPDFPage(nil)
+        var imageForPDF = cgImage
+        if forceBilevel, let bilevel = makeBilevelImage(cgImage) {
+            imageForPDF = bilevel
+            pdfContext.setShouldAntialias(false)
+            pdfContext.interpolationQuality = .none
+        } else if isBilevel(cgImage) {
+            pdfContext.setShouldAntialias(false)
+            pdfContext.interpolationQuality = .none
+        } else if cgImage.colorSpace?.model == .monochrome, cgImage.alphaInfo == .none,
+                  let bilevel = makeBilevelImage(cgImage) {
+            imageForPDF = bilevel
+            pdfContext.setShouldAntialias(false)
+            pdfContext.interpolationQuality = .none
+        }
+        pdfContext.draw(imageForPDF, in: mediaBox)
+
+        drawTextLayer(pdfContext, pageSize: pageSize, results: ocrResults)
+        pdfContext.endPDFPage()
+        pdfContext.closePDF()
+    }
 }

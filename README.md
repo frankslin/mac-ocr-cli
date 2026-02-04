@@ -6,6 +6,7 @@ A minimal macOS OCR command-line tool written in Swift, using Apple’s Vision f
 
 - macOS with Vision framework support
 - Xcode Command Line Tools (for `swiftc`)
+- Optional for `--ccitt-g4`: `libtiff` (`tiffcp`, `tiff2pdf`) and `qpdf`
 
 ## Build
 
@@ -35,6 +36,7 @@ ocr_tool-universal2
 ./ocr_tool /path/to/input.pdf --page 1 --json --scale 4
 ./ocr_tool /path/to/input.pdf --page 1 --json --scale 4 --debug-image /tmp/page1.png
 ./ocr_tool /path/to/image.png --json --revision 3
+./ocr_tool /path/to/input.pdf --page 1 --pdf /path/to/output.pdf --ccitt-g4
 ```
 
 The output is JSON:
@@ -51,6 +53,8 @@ The output is JSON:
 - PDF input requires `--page <n>` (1-based).
 - Use `--scale <factor>` to render PDF pages at higher resolution (default `3`).
 - Use `--debug-image <path>` to write the rendered page image for inspection.
+- Use `--bilevel` to force 1-bit output when writing PDF (smaller files).
+- Use `--ccitt-g4` to generate a CCITT G4 PDF via libtiff (`tiffcp`, `tiff2pdf`) and overlay text with `qpdf`.
 - Use `--revision <n>` to select a Vision recognition revision (defaults to latest supported).
 - Use `--list-revisions` to print supported recognition revisions and exit (macOS 12+).
 - Use `--help` or `-h` to show all options.
@@ -66,6 +70,8 @@ To compile with the current git commit ID embedded:
 - Choose exactly one output mode: `--json` or `--pdf <out.pdf>`.
 - Use `--pdf <out.pdf>` to write a searchable PDF with an invisible text layer.
 - Recognition level is set to `accurate`.
+- PDF metadata includes the tool name and commit ID (when embedded).
+- If the input image is monochrome (black/white) it will be converted to 1-bit and written without interpolation to favor CCITT G4 compression.
 
 ## License
 
