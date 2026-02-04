@@ -6,7 +6,7 @@ import PDFKit
 // 1. Parse arguments
 let args = Array(CommandLine.arguments.dropFirst())
 
-let buildCommit = "__GIT_COMMIT__"
+let buildCommit = "__GIT_COMMIT_VALUE__"
 
 let helpText = """
 Usage: ocr_tool [--help] [--version] [--list-revisions] <image_path|pdf_path> [--langs <lang1,lang2,...>] [--page <n>] [--scale <factor>] [--debug-image <path>] [--revision <n>] (--json | --pdf <out.pdf>)
@@ -30,7 +30,7 @@ if args.contains("--help") || args.contains("-h") {
 }
 
 if args.contains("--version") || args.contains("-v") {
-    if buildCommit == "__GIT_COMMIT__" {
+    if buildCommit == "__GIT_COMMIT_VALUE__" {
         print("unknown")
     } else {
         print(buildCommit)

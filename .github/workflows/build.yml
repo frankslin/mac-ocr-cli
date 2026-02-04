@@ -17,9 +17,20 @@ jobs:
         run: |
           set -euo pipefail
           COMMIT=$(git rev-parse --short HEAD)
-          TMP=$(mktemp)
+          export COMMIT
+          TMP_BASE=$(mktemp -t ocr_buildXXXXXX)
+          TMP="${TMP_BASE}.swift"
           trap 'rm -f "$TMP"' EXIT
-          sed "s/__GIT_COMMIT__/${COMMIT}/g" ocr.swift > "$TMP"
+          python3 - <<'PY' > "$TMP"
+          import os
+          commit = os.environ.get("COMMIT", "")
+          if not commit:
+              raise SystemExit("Error: COMMIT is empty")
+          with open("ocr.swift", "r", encoding="utf-8") as f:
+              data = f.read()
+          data = data.replace("__GIT_COMMIT_VALUE__", commit, 1)
+          print(data, end="")
+          PY
 
           SDKROOT=$(xcrun --show-sdk-path)
           swiftc "$TMP" -o ocr_tool_arm64 -sdk "$SDKROOT" -target arm64-apple-macosx11.0
